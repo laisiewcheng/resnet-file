@@ -1,0 +1,15 @@
+Use CPU
+Loaded model to device
+start time:  2020-04-25 13:27:31.651668
+Epoch: [0][0/391]	Time 6.342 (6.342)	Data 0.031 (0.031)	Loss 3.2670 (3.2670)	Prec_top1 10.156 (10.156)
+Use CPU
+Loaded model to device
+Test: [0/79]	Time 2.801 (2.801)	Loss 2.3453 (2.3453)	Prec_top1 8.594 (8.594)
+Use CPU
+Loaded model to device
+Test: [0/79]	Time 2.879 (2.879)	Loss 2.3203 (2.3203)	Prec_top1 8.594 (8.594)
+Use CPU
+Loaded model to device
+start time:  2020-04-26 11:35:22.231021
+current lr 1.00000e-01
+Epoch: [0][0/391]	Time 6.295 (6.295)	Data 0.030 (0.030)	Loss 3.0361 (3.0361)	Prec_top1 10.156 (10.156)
