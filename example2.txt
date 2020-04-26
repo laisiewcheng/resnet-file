@@ -1,0 +1,10 @@
+If you have a model with lots of layers, you can create a list first and then use the * operator to expand the list into positional arguments, like this:
+
+layers = []
+layers.append(nn.Linear(3, 4))
+layers.append(nn.Sigmoid())
+layers.append(nn.Linear(4, 1))
+layers.append(nn.Sigmoid())
+
+net = nn.Sequential(*layers)
+This will result in a similar structure of your code, as adding directly.
