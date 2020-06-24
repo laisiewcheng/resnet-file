@@ -54,12 +54,12 @@ print('Using device:', device)
 print()
 
 
- normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
-                                     std=[0.2023, 0.1994, 0.2010])
-        
-
 def create_cifar10_loader(args):
-# MNIST Dataset
+    
+    normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+                                     std=[0.2023, 0.1994, 0.2010])
+    
+    # CIFAR10 Dataset
     train_dataset = datasets.CIFAR10(root='./data/',
                                    train=True,
                                    transform=transforms.Compose([
