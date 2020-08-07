@@ -1,244 +1,391 @@
 # -*- coding: utf-8 -*-
 """
- @Time    : 2019/2/19 16:06
- @Author  : Wang Xin
- @Email   : wangxin_buaa@163.com
-"""
-import argparse
-import os
+Created on Tue Apr 21 22:53:41 2020
 
+@author: User
+"""
+import os
+import time
+import shutil
+import argparse
+import torch.utils.data
 import torch
 import torch.nn as nn
-from torch.optim import lr_scheduler
-import torch.nn.functional as F
-from torchvision import datasets, transforms
+import torchvision
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import resnet
+import testnetwork
+import config as cf
 
-import torch.optim as optim
-
-from tqdm import tqdm
-from network.network import PlainNet, DeformNet, DeformNet_v2
-
-from utils import utils
-
-
-def parse_command():
-    model_names = ['plain', 'deform', 'deform_v2']
-
-    parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-    parser.add_argument('--resume', default=None, type=str, metavar='PATH')
-    #parser.add_argument('--model', type=str, default='deform_v2', choices=model_names)
-    parser.add_argument('--model', type=str, default='deform', choices=model_names)
-    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
-                        help='input batch size for training (default: 32)')
-    parser.add_argument('--test-batch-size', type=int, default=32, metavar='N',
-                        help='input batch size for testing (default: 32)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
-                        help='learning rate (default: 0.01)')
-    parser.add_argument('--lr_patience', default=2, type=int,
-                        help='Patience of LR scheduler. See documentation of ReduceLROnPlateau.')
-    parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
-                        help='SGD momentum (default: 0.5)')
-    parser.add_argument('--seed', type=int, default=1, metavar='S',
-                        help='random seed (default: 1)')
-    parser.add_argument('--gpu', default=None, type=str, help='if not none, use Single GPU')
-    parser.add_argument('--print_freq', type=int, default=50, metavar='N',
-                        help='how many batches to wait before logging training status')
-    args = parser.parse_args()
-
-    return args
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print('Using device:', device)
-print()
-
-def create_mnist_loader(args):
-    # MNIST Dataset
-    train_dataset = datasets.MNIST(root='./data/',
-                                   train=True,
-                                   transform=transforms.ToTensor(),
-                                   download=True)
-
-    test_dataset = datasets.MNIST(root='./data/',
-                                  train=False,
-                                  transform=transforms.ToTensor())
-
-    # Data Loader (Input Pipeline)
-    train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                               batch_size=args.batch_size,
-                                               shuffle=True)
-
-    test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
-                                              batch_size=args.batch_size,
-                                              shuffle=False)
-    return train_loader, test_loader
+ 
+import datetime
 
 
-def init_weight(net):
-    for m in net.modules():
-        if isinstance(m, nn.Conv2d):
-            torch.nn.init.xavier_normal_(m.weight)
+parser = argparse.ArgumentParser(description = 'ResNet101 with CIFAR10 PyTorch')
+parser.add_argument('--epochs', default=1, type=int, metavar='N',
+                    help='number of total epochs to run')
+parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
+                    help='manual epoch number (useful on restarts)')
+parser.add_argument('--resume', default='', type=str, metavar='PATH',
+                    help='path to latest checkpoint (default: none)')
+#parser.add_argument('--resume', '-r', action = 'store_true', help = 'resume from checkpoint')
+parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
+                    help='number of data loading workers (default: 4)')
+parser.add_argument('-b', '--batch-size', default=128, type=int,
+                    metavar='N', help='mini-batch size (default: 128)')
+parser.add_argument('--print-freq', '-p', default=50, type=int,
+                    metavar='N', help='print frequency (default: 20)')
+parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+                    metavar='LR', help='initial learning rate')
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                    help='momentum')
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
+                    metavar='W', help='weight decay (default: 5e-4)')
+parser.add_argument('-e', '--evaluate', default = False, dest='evaluate', action='store_true',
+                    help='evaluate model on validation set')
+parser.add_argument('--save-dir', dest='save_dir',
+                    help='The directory used to save the trained models',
+                    default='save_temp', type=str)
+parser.add_argument('--save-every', dest='save_every',
+                    help='Saves checkpoints at every specified number of epochs',
+                    type=int, default=10)
 
-            if m.bias is not None:
-                m.bias.data.zero_()
-        elif isinstance(m, nn.BatchNorm2d):
-            m.weight.data.fill_(1)
-            m.bias.data.zero_()
+ #check if gpu or cpu
+#if torch.cuda.is_available():
+#    device = 'cuda'
+#    print('Use GPU')
+#else:
+#    device = 'cpu'
+#    print('Use CPU')
+ 
+f = open("output-resnet3.txt", "a")
 
-
-#when run program, it start from here
 def main():
-    args = parse_command()
-    print(args)
-
-    # if setting gpu id, the using single GPU
-    if args.gpu:
-        print('Single GPU Mode.')
-        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-
-    # set random seed
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
+    global args, best_prec
+    args = parser.parse_args()
     
-    if torch.cuda.is_available(): 
-        if torch.cuda.device_count() > 1:
-            print("Let's use", torch.cuda.device_count(), "GPUs!")
-            args.batch_size = args.batch_size * torch.cuda.device_count()
-        else:
-            print("Let's use GPU ", torch.cuda.current_device())
-                
+    best_prec = 0
+    
+    #check if save directory exist or not
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir)
+        
+    #check if gpu or cpu
+    if torch.cuda.is_available():
+        device = 'cuda'
+        #device = torch.device("cuda:1")
+        print('Use GPU', file = f)
     else:
-        print("Let's use CPU")
+        device = 'cpu'
+        print('Use CPU', file = f)
+        
+#    if args.evaluate:
+#        print('evaluate')
+#    else:
+#        print('not evaluate')   
+#        
+    #load model ResNet101 to device
+    #model = resnet_deform.ResNet101()
+    #model = resnet.ResNet(101, 10)
+    model = resnet.ResNet101()
+    #model = testnetwork.DeformNet()
+    #model = testnetwork.PlainNet()
+    #model = resnet.ResNet50()
+    #model = resnet.ResNet18()
+    #model = torch.hub.load('pytorch/vision:v0.6.0', 'resnet101', pretrained=False)
+    if torch.cuda.device_count() > 1:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+    # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
 
-    train_loader, test_loader = create_mnist_loader(args)
-
-    # create save dir and logger
-    save_dir = utils.get_save_path(args)
-    utils.write_config_file(args, save_dir)
-    logger = utils.get_logger(save_dir)
-
-    best_result = 0.0
-    best_txt = os.path.join(save_dir, 'best.txt')
-
-    train_acc = 0.0
-    train_loss = 0.0
-
-    start_epoch = 0
-    start_iter = len(train_loader) * start_epoch + 1
-    max_iter = len(train_loader) * (args.epochs - start_epoch + 1) + 1
-    iter_save = len(train_loader)
-
-    if args.model == 'plain':
-        model = PlainNet()
-    elif args.model == 'deform':
-        model = DeformNet()
-    else:
-        model = DeformNet_v2()
-    model.apply(init_weight)
-    # You can use DataParallel() whether you use Multi-GPUs or not
-    model = nn.DataParallel(model).cuda()
-
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    criterion = nn.NLLLoss()
-
-    # when training, use reduceLROnPlateau to reduce learning rate
-    scheduler = lr_scheduler.ReduceLROnPlateau(
-        optimizer, 'max', patience=args.lr_patience)
-
+    model = nn.DataParallel(model)
+    model = model.to(device)
+   
+   
+    #can add code to use multi GPU here
+    print('Loaded model to device', file = f)
+    print('Loaded model to device')
+    
+    #add code here to resume from a checkpoint
+        
+    #preparing CIFAR 10 dataset
+#    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+#                                     std=[0.229, 0.224, 0.225])
+    
+    normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+                                     std=[0.2023, 0.1994, 0.2010])
+    
+    #setting for for training dataset
+    train_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR10(root = './data', train = True, transform = transforms.Compose([
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomCrop(32, 4),
+                    transforms.ToTensor(),
+                    normalize,
+                    ]), download = True),
+            batch_size = args.batch_size, shuffle = True,
+            num_workers = args.workers, pin_memory = True)
+        
+    #setting for validation dataset
+    val_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR10(root = './data', train = False, transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    normalize,
+                    ])),
+        batch_size = 128, shuffle = False,
+        num_workers = args.workers, pin_memory = True)
+        
+        
+    #define loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    
+    #define optimizer used
+    optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum = args.momentum, weight_decay = args.weight_decay)
+    
+    
+    #lr_scheduler - methods to adjust the learning rate based on the number of epochs.
+    #MultiStepLR - Decays the learning rate of each parameter group by gamma once the number 
+    #of epoch reaches one of the milestones.
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = [100, 150], last_epoch = args.start_epoch - 1)
+    
+    
+    
+    #for validation process
+    if args.evaluate:
+        validate(val_loader, model, criterion)
+        return
+    
+    
+    #print start time for taining
+    starttime = datetime.datetime.now()
+    print ('start time: ', str(starttime), file = f)
+    
+    #for training process
+    for epoch in range(args.start_epoch, args.epochs):
+        print("Start Training")
+        #for each epoch
+        print('current lr {:.5e}'.format(optimizer.param_groups[0]['lr']), file = f)
+        print('Start Training Epoch: ', epoch)
+        print ('Epoch ', epoch, 'start time: ', str(datetime.datetime.now()))
+        train(train_loader, model, criterion, optimizer, epoch)
+        print ('Epoch ', epoch, 'end time: ', str(datetime.datetime.now()))
+        lr_scheduler.step()
+        
+        #after one epoch, evaluate using validation set
+        print('Start Validation for Epoch: ', epoch)
+        prec = validate(val_loader, model, criterion)
+        
+        #save the best prec 
+        is_best_prec = prec > best_prec
+        best_prec = max(prec, best_prec)
+        
+        #save checkpoint
+        if epoch > 0 and epoch % args.save_every == 0:
+            save_checkpoint({'epoch': epoch + 1,
+                             'state_dict': model.state_dict(), 
+                             'best_prec': best_prec,},
+         is_best_prec, filename = os.path.join(args.save_dir, 'checkpoint_resnet101.th'))
+            
+        save_checkpoint({'state_dict': model.state_dict(), 
+                         'best_prec': best_prec,},
+             is_best_prec, filename = os.path.join(args.save_dir, 'model_resnet101.th'))
+        
+    #print end time for taining
+    endtime = datetime.datetime.now()
+    print ('end time: ', str(endtime), file = f)
+        
+#define the training process for one epoch
+def train(train_loader, model, criterion, optimizer, epoch):
+    
+    #update variables using function AverageMeter()
+    batch_time = AverageMeter() #time for one batch
+    data_time = AverageMeter() #time for one 
+    losses = AverageMeter() #losses
+    top1 = AverageMeter() #top 1 prediction
+    
+    #put model ResNet101 in train mode
     model.train()
+    
+    end_time = time.time()
+    for i, (input, target) in enumerate(train_loader):
+        
+        #measure loading time
+        data_time.update(time.time() - end_time)
+        
+        #if use GPU
+        if torch.cuda.is_available():
+            target = target.cuda()
+            input_var = input.cuda()
+            target_var = target
+        
+        #if use CPU
+        else:    
+            target = target
+            input_var = input
+            target_var = target
+        
+        #compute output - need to load input to model ResNet101
+        #print("input size: ", input_var.size())
+        output = model(input_var) #load input to model
+        
+        #calculate loss - compute difference targeted output with actual output (output)
+        loss = criterion(output, target_var)
+        
+        
+        #compute gradient and perform SGD step
+        optimizer.zero_grad() #reset gradient to zero first 
+        loss.backward() #compute gradients in backward pass
+        optimizer.step() #update values of net.params() with the computed gradients
+        
+        output = output.float()
+        loss = loss.float()
+        
+        #measure network accuracy and record loss
+        prec = accuracy(output.data, target)[0]
+        losses.update(loss.item(), input.size(0))
+        top1.update(prec.item(), input.size(0))
+        
+        #measure elapsed time for one batch
+        batch_time.update(time.time() - end_time)
+        end_time = time.time()
+        
+        #print information for training
+        #print_freq is 50 by default
+        #print info every 50 iterations
+        #each iteration has 128 images
+        if i % args.print_freq == 0:
+            print('Epoch: [{0}][{1}/{2}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Prec_top1 {top1.val:.3f} ({top1.avg:.3f})'.format(
+                          epoch, i, len(train_loader), batch_time = batch_time,
+                          data_time = data_time, loss = losses, top1 = top1), file = f)
+            
+            
 
-    for it in tqdm(range(start_iter, max_iter + 1), total=max_iter, leave=False, dynamic_ncols=True):
-        optimizer.zero_grad()
-
-        try:
-            input, target = next(loader_iter)
-        except:
-            loader_iter = iter(train_loader)
-            input, target = next(loader_iter)
-
-        input = input.cuda()
-        target = target.cuda()
-
-        output = model(input)
-        loss = criterion(output, target)
-        loss.backward()
-        optimizer.step()
-
-        #train_loss += loss.data[0]
-        train_loss += loss.data
-        pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
-        per_acc = pred.eq(target.data.view_as(pred)).sum()
-        train_acc += per_acc.cpu()
-
-        if it % args.print_freq == 0:
-            print('=> output: {}'.format(save_dir))
-            print('Train Iter: [{0}/{1}]\t'
-                  'Loss={Loss:.5f} '
-                  'Accuracy={Acc:.5f}'
-                  .format(it, max_iter, Loss=loss, Acc=float(per_acc) / args.batch_size))
-            logger.add_scalar('Train/Loss', loss, it)
-            # logger.add_scalar('Train/Acc', per_acc / args.batch_size, it)
-
-        if it % iter_save == 0:
-            epoch = it // iter_save
-            correct, test_loss = test(model, test_loader, it, logger)
-
-            # save the change of learning_rate
-            for i, param_group in enumerate(optimizer.param_groups):
-                old_lr = float(param_group['lr'])
-                logger.add_scalar('Lr/lr_' + str(i), old_lr, it)
-
-            # remember change of train/test loss and train/test acc
-            train_loss = float(train_loss)
-            train_acc = float(train_acc)
-            train_loss /= len(train_loader.dataset)
-            train_acc /= len(train_loader.dataset)
-
-            logger.add_scalars('TrainVal/acc', {'train_acc': train_acc, 'test_acc': correct}, epoch)
-            logger.add_scalars('TrainVal/loss', {'train_loss': train_loss, 'test_loss': test_loss}, epoch)
-
-            train_loss = 0.0
-            train_acc = 0.0
-
-            # remember best rmse and save checkpoint
-            is_best = correct > best_result
-            if is_best:
-                best_result = correct
-                with open(best_txt, 'w') as txtfile:
-                    txtfile.write("epoch={}, acc={}".format(epoch, correct))
-
-            scheduler.step(correct)
-
-            model.train()
-
-    logger.close()
-
-
-def test(model, test_loader, epoch, logger=None):
+#validation process (after training)
+def validate(val_loader, model, criterion):
+    
+    batch_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    
+    #put model ResNet101 in evaluation (validation) mode
     model.eval()
-    test_loss = 0.0
-    correct = 0.0
-    for data, target in test_loader:
-        data, target = data.cuda(), target.cuda()
-        output = model(data)
-        #test_loss += F.nll_loss(output, target, size_average=False).data[0]  # sum up batch loss
-        test_loss += F.nll_loss(output, target, size_average=False).data
-        pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
-        correct += pred.eq(target.data.view_as(pred)).sum().cpu()
+    
+    end_time = time.time()
+    #do not generate gradient in evaluation mode
+    with torch.no_grad():
+        for i, (input, target) in enumerate(val_loader):
+            
+             if torch.cuda.is_available():
+                 target = target.cuda()
+                 input_var = input.cuda()
+                 target_var = target.cuda()
+             else:
+                 target = target
+                 input_var = input
+                 target_var = target
+             
+             #compute output for input
+             output = model(input_var)
+             
+             #calculate loss - compute difference targeted output with actual output (output)
+             loss = criterion(output, target_var)
+             
+             #measure network accuracy and record loss
+             prec = accuracy(output.data, target)[0]
+             losses.update(loss.item(), input.size(0))
+             top1.update(prec.item(), input.size(0))
+             
+             #measure elapse time
+             batch_time.update(time.time() - end_time)
+             end_time = time.time()
+             
+             #print information for training of one epoch
+             if i % args.print_freq == 0:
+                 print('Test: [{0}/{1}]\t'
+                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                       'Prec_top1 {top1.val:.3f} ({top1.avg:.3f})'.format(
+                          i, len(val_loader), batch_time = batch_time,
+                          loss = losses, top1 = top1), file = f)
+                 
+    print(' *Prec_top1 {top1.avg:.3f}'.format(top1 = top1), file = f)
+    
+    return top1.avg
 
-    test_loss = float(test_loss)
-    correct = float(correct)
-    test_loss /= len(test_loader.dataset)
-    correct /= len(test_loader.dataset)
 
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {:.0f}%\n'.format(test_loss, 100. * correct))
+#function to save the trained model.
+def save_checkpoint(state, is_best, filename = 'checkpoint.pth.tar'):
+    
+    torch.save(state, filename)
+    
 
-    logger.add_scalar('Test/loss', test_loss, epoch)
-    logger.add_scalar('Test/acc', correct, epoch)
 
-    return float(correct), float(test_loss)
+#class to store the average and current value
+class AverageMeter(object):
+    def __init__(self):
+        self.reset()
+        print('reset')
+        
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+        
+        
+    def update(self, val, n = 1):
+        self.val = val
+        self.sum += val * n
+        self.count = self.count + n
+        self.avg = self.sum / self.count
+        
+
+
+#computes precision for specified k
+#prec = accuracy(output.data, target)[0]
+def accuracy(output, target, topk = (1, )):
+     
+    maxk = max(topk)
+    batch_size = target.size(0)
+    
+    _, pred = output.topk(maxk, 1, True, True)
+    pred = pred.t()
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    
+    res = []
+    for k in topk:
+        #accumulate all correct prediction
+        correct_k = correct[:k].view(-1).float().sum(0)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
 
 
 if __name__ == '__main__':
     main()
+
+    
+        
+    
+        
+    
+    
+    
+
+
+
+
+    
+    
+
+    
+
+    
+        
+    
+
+
